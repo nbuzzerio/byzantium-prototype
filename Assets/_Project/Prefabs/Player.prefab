@@ -137,7 +137,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 3721372198768634331}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: -0.9507852, z: 0, w: -0.30985087}
+  m_LocalRotation: {x: 0, y: 0.9507865, z: 0, w: 0.30984694}
   m_LocalPosition: {x: 0.37124705, y: 0.079999804, z: -1.1246141}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -145,7 +145,7 @@ Transform:
   - {fileID: 1792731391128687738}
   - {fileID: 4432663035636610147}
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 143.9, z: 0}
 --- !u!143 &4452638973335536989
 CharacterController:
   m_ObjectHideFlags: 0
@@ -183,12 +183,45 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 82a06f024ce05e240986c8403f438826, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  currentState: 0
+  showDebugHUD: 1
+  debugHudOffset: {x: 12, y: 12}
   moveSpeed: 5.5
   acceleration: 14
   deceleration: 18
+  sprintMultiplier: 2.5
   visualBody: {fileID: 1792731391128687738}
   turnSpeed: 12
+  jumpHeight: 1.5
+  jumpBufferTime: 0.1
+  coyoteTime: 0.1
   gravity: -20
+  groundRadius: 0.35
+  groundCheckDistance: 0.25
+  groundMask:
+    serializedVersion: 2
+    m_Bits: 1
+  maxSlopeAngle: 45
+  enableSteepSlide: 1
+  steepSlideSpeed: 1.2
+  steepSlideAcceleration: 10
+  steepSlideKick: 1
+  maxStamina: 100
+  staminaDrainPerSecond: 25
+  staminaRegenPerSecond: 18
+  exhaustedRegenDelay: 0.6
+  rollKey: 306
+  rollDuration: 0.35
+  rollSpeed: 10
+  rollCost: 25
+  rollCooldown: 0.45
+  rollRecoveryTime: 0.12
+  cameraTransform: {fileID: 0}
+  currentStamina: 0
+  isRolling: 0
+  rollTimer: 0
+  rollCooldownTimer: 0
+  rollRecoveryTimer: 0
 --- !u!114 &4897353300127974063
 MonoBehaviour:
   m_ObjectHideFlags: 0
