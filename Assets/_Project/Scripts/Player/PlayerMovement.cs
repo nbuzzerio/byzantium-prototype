@@ -3,14 +3,45 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public class PlayerMovement : MonoBehaviour
 {
+    // =========================================================
+    // State
+    // =========================================================
+    public enum MovementState
+    {
+        Idle,
+        Walking,
+        Sprinting,
+        Sliding,
+        Airborne,
+        Exhausted,
+        Rolling
+    }
+
+    // Inspector-visible backing field (Unity doesn't show properties)
+    [SerializeField] private MovementState currentState = MovementState.Idle;
+    public MovementState CurrentState => currentState;
+
+    // =========================================================
+    // Debugging
+    // =========================================================
+    [Header("Debug HUD")]
+    [SerializeField] private bool showDebugHUD = true;
+    [SerializeField] private Vector2 debugHudOffset = new Vector2(12f, 12f);
+
+    // =========================================================
+    // Movement tuning
+    // =========================================================
     [Header("Movement")]
     [SerializeField] private float moveSpeed = 5.5f;
     [SerializeField] private float acceleration = 14f;
     [SerializeField] private float deceleration = 18f;
 
+    [Header("Sprint")]
+    [SerializeField] private float sprintMultiplier = 2.5f;
+
     [Header("Facing")]
-    [SerializeField] private Transform visualBody;   // drag Player/Body here
-    [SerializeField] private float turnSpeed = 12f;  // higher = snappier
+    [SerializeField] private Transform visualBody;
+    [SerializeField] private float turnSpeed = 12f;
 
     [Header("Jump")]
     [SerializeField] private float jumpHeight = 1.5f;
@@ -20,28 +51,68 @@ public class PlayerMovement : MonoBehaviour
     [Header("Gravity")]
     [SerializeField] private float gravity = -20f;
 
-    [Header("Ground Check (Probe)")]
-    [SerializeField] private Transform groundCheck;   // Empty child near feet
-    [SerializeField] private float groundRadius = 0.25f;
-    [SerializeField] private float groundCheckDistance = 0.25f;
+    // =========================================================
+    // Ground / slope
+    // =========================================================
+    [Header("Ground Probe")]
+    [SerializeField] private float groundRadius = 0.35f;
+    [SerializeField] private float groundCheckDistance = 0.50f;
     [SerializeField] private LayerMask groundMask;
     [SerializeField] private float maxSlopeAngle = 45f;
 
     [Header("Steep Slope Slide")]
     [SerializeField] private bool enableSteepSlide = true;
-    [SerializeField] private float steepSlideSpeed = 1.2f;        // base slide speed
-    [SerializeField] private float steepSlideAcceleration = 10f;  // how fast slide ramps once already sliding
-    [SerializeField] private float steepSlideKick = 1.0f;         // immediate kick when bracing stops (0..1)
+    [SerializeField] private float steepSlideSpeed = 1.2f;
+    [SerializeField] private float steepSlideAcceleration = 10f;
+    [SerializeField] private float steepSlideKick = 1.0f;
+
+    // =========================================================
+    // Stamina
+    // =========================================================
+    [Header("Stamina")]
+    [SerializeField] private float maxStamina = 100f;
+    [SerializeField] private float staminaDrainPerSecond = 25f;
+    [SerializeField] private float staminaRegenPerSecond = 18f;
+    [SerializeField] private float exhaustedRegenDelay = 0.6f;
+
+    // =========================================================
+    // Dodge Roll (Prep)
+    // =========================================================
+    [Header("Dodge Roll")]
+    [SerializeField] private KeyCode rollKey = KeyCode.LeftAlt;
+    [SerializeField] private float rollDuration = 0.35f;
+    [SerializeField] private float rollSpeed = 10f;
+    [SerializeField] private float rollCost = 25f;
+
+    // inspector-visible runtime for roll
+    [SerializeField] private float rollTimer;
+    [SerializeField] private bool isRolling;
+
+    // =========================================================
+    // Runtime info (Inspector-visible fields)
+    // =========================================================
+    [Header("Runtime (Read Only)")]
+    [SerializeField] private float currentStamina; // backing field for inspector
+    public float CurrentStamina => currentStamina;
 
     public bool IsGrounded { get; private set; }
     public bool OnWalkableGround { get; private set; }
     public Vector3 GroundNormal { get; private set; } = Vector3.up;
     public float GroundAngle { get; private set; }
 
+    public bool CanRoll =>
+        IsGrounded &&
+        OnWalkableGround &&
+        currentStamina >= rollCost &&
+        !isRolling;
+
+    // =========================================================
+    // Internals
+    // =========================================================
     private CharacterController controller;
 
-    private Vector3 horizontalVelocity; // x/z only (smoothed)
-    private float verticalVelocity;     // y only
+    private Vector3 horizontalVelocity;
+    private float verticalVelocity;
 
     private float jumpBufferCounter;
     private float coyoteCounter;
@@ -49,9 +120,21 @@ public class PlayerMovement : MonoBehaviour
     private Vector3 steepSlideVelocity;
     private bool wasBracingLastFrame;
 
+    private float exhaustedTimer;
+
+    private Vector3 rollDirection;
+    public bool IsRolling => isRolling;
+
+    // =========================================================
+    // Unity lifecycle
+    // =========================================================
     private void Awake()
     {
         controller = GetComponent<CharacterController>();
+        currentStamina = maxStamina;
+        currentState = MovementState.Idle;
+        rollTimer = 0f;
+        isRolling = false;
     }
 
     private void Update()
@@ -59,114 +142,86 @@ public class PlayerMovement : MonoBehaviour
         // 0) Ground probe
         UpdateGroundProbe();
 
-        // 1) Read input
+        // 1) Input
         float x = Input.GetAxisRaw("Horizontal");
         float z = Input.GetAxisRaw("Vertical");
 
-        Vector3 input = new Vector3(x, 0f, z);
-        input = Vector3.ClampMagnitude(input, 1f);
+        Vector3 input = Vector3.ClampMagnitude(new Vector3(x, 0f, z), 1f);
         bool hasMoveInput = input.sqrMagnitude > 0.001f;
 
+        // Intent signals
+        bool forwardIntent = Input.GetKey(KeyCode.W);
+        bool bracingNow = forwardIntent; // your design: only W prevents slipping
+        bool sprintIntent = Input.GetKey(KeyCode.LeftShift);
+
+        // Sprint gating (stamina + situation)
+        bool sprintAllowed =
+            IsGrounded &&
+            OnWalkableGround &&
+            forwardIntent &&
+            currentStamina > 0.1f &&
+            !isRolling;
+
+        bool isSprinting = sprintIntent && sprintAllowed;
+
         // 2) Desired horizontal velocity
-        Vector3 desired = (transform.right * input.x + transform.forward * input.z) * moveSpeed;
+        float speed = isSprinting ? moveSpeed * sprintMultiplier : moveSpeed;
+        Vector3 desired = (transform.right * input.x + transform.forward * input.z) * speed;
 
         // 3) Block uphill on too-steep surfaces
         if (IsGrounded && !OnWalkableGround && IsTryingToMoveUpSlope(desired))
-        {
             desired = Vector3.zero;
-        }
 
         // 4) Walkable slopes: hug ground plane
         if (IsGrounded && OnWalkableGround)
-        {
             desired = ProjectOnGround(desired);
-        }
 
         // 5) Smooth accel/decel
         float lerpRate = hasMoveInput ? acceleration : deceleration;
         horizontalVelocity = Vector3.Lerp(horizontalVelocity, desired, lerpRate * Time.deltaTime);
 
-        // Strafe-friendly facing: rotate only with forward/back intent
+        // 6) Facing (rotate only with forward/back intent)
         if (hasMoveInput && Mathf.Abs(input.z) > 0.1f)
             RotateBodyTowards(desired);
 
-        // 6) Steep slope rule (ACTIVE BRACING):
-        // On too-steep slopes, you slip unless you're actively holding W (forward).
-        if (enableSteepSlide && IsGrounded && !OnWalkableGround)
+        // 7) Steep slope rule (ACTIVE BRACING)
+        ApplySteepSlopeSliding(bracingNow);
+
+        // 8) Stamina update
+        UpdateStamina(isSprinting);
+
+        // 8.5) Roll input (prep)
+        // NOTE: removed your duplicate LeftAlt test block; this is the single source of truth.
+        if (!isRolling && Input.GetKeyDown(rollKey) && CanRoll)
         {
-            bool bracingNow = input.z > 0.1f; // ONLY W/forward prevents slipping
-
-            if (bracingNow)
+            if (TrySpendStamina(rollCost))
             {
-                // While bracing, cancel slide completely (no drift)
-                steepSlideVelocity = Vector3.zero;
-                wasBracingLastFrame = true;
-            }
-            else
-            {
-                Vector3 downSlope = GetDownSlopeDirection();
-
-                // scale by steepness: 0 at maxSlopeAngle, 1 at 90
-                float t = Mathf.InverseLerp(maxSlopeAngle, 90f, GroundAngle);
-
-                Vector3 targetSlide = downSlope * (steepSlideSpeed * t);
-
-                // If we JUST stopped bracing this frame, kick immediately into sliding
-                if (wasBracingLastFrame)
-                {
-                    steepSlideVelocity = Vector3.Lerp(Vector3.zero, targetSlide, steepSlideKick);
-                }
-                else
-                {
-                    steepSlideVelocity = Vector3.Lerp(steepSlideVelocity, targetSlide, steepSlideAcceleration * Time.deltaTime);
-                }
-
-                horizontalVelocity += steepSlideVelocity;
-
-                wasBracingLastFrame = false;
+                StartRoll(input);
             }
         }
-        else
+
+        // 8.6) Roll update (timer only for now)
+        if (isRolling)
         {
-            // leaving steep ground -> clear bracing state and slide
-            wasBracingLastFrame = false;
-            steepSlideVelocity = Vector3.Lerp(steepSlideVelocity, Vector3.zero, steepSlideAcceleration * Time.deltaTime);
+            UpdateRoll();
         }
 
-        // 7) Jump buffer
-        if (Input.GetButtonDown("Jump"))
-            jumpBufferCounter = jumpBufferTime;
-        else
-            jumpBufferCounter -= Time.deltaTime;
+        // 9) State update
+        UpdateMovementState(hasMoveInput, bracingNow, isSprinting, sprintIntent, forwardIntent);
 
-        // 8) Coyote time (stable)
-        if (controller.isGrounded)
-            coyoteCounter = coyoteTime;
-        else
-            coyoteCounter -= Time.deltaTime;
+        // 10) Jumping (optional: we can later disable jumping during roll)
+        HandleJump();
 
-        // 9) Jump
-        if (jumpBufferCounter > 0f && coyoteCounter > 0f)
-        {
-            jumpBufferCounter = 0f;
-            coyoteCounter = 0f;
-
-            float jumpVelocity = Mathf.Sqrt(2f * jumpHeight * -gravity);
-            verticalVelocity = jumpVelocity;
-        }
-
-        // 10) Ground stick
-        if (IsGrounded && verticalVelocity < 0f)
-            verticalVelocity = -2f;
-
-        // 11) Gravity
-        verticalVelocity += gravity * Time.deltaTime;
+        // 11) Vertical velocity
+        ApplyVerticalForces();
 
         // 12) Move
-        Vector3 velocity = horizontalVelocity + Vector3.up * verticalVelocity;
-        controller.Move(velocity * Time.deltaTime);
+        controller.Move((horizontalVelocity + Vector3.up * verticalVelocity) * Time.deltaTime);
     }
 
+    // =========================================================
+    // Ground probe (controller-based)
+    // =========================================================
     private void UpdateGroundProbe()
     {
         IsGrounded = false;
@@ -174,12 +229,18 @@ public class PlayerMovement : MonoBehaviour
         GroundNormal = Vector3.up;
         GroundAngle = 0f;
 
-        if (groundCheck == null) return;
+        Vector3 centerWorld = transform.TransformPoint(controller.center);
+        float bottomY = centerWorld.y - (controller.height * 0.5f) + controller.radius;
+        Vector3 origin = new Vector3(centerWorld.x, bottomY + 0.05f, centerWorld.z);
 
-        Vector3 origin = groundCheck.position + Vector3.up * 0.05f;
-        float castDistance = groundCheckDistance + 0.05f;
-
-        if (Physics.SphereCast(origin, groundRadius, Vector3.down, out RaycastHit hit, castDistance, groundMask, QueryTriggerInteraction.Ignore))
+        if (Physics.SphereCast(
+            origin,
+            groundRadius,
+            Vector3.down,
+            out RaycastHit hit,
+            groundCheckDistance,
+            groundMask,
+            QueryTriggerInteraction.Ignore))
         {
             IsGrounded = true;
             GroundNormal = hit.normal;
@@ -188,23 +249,168 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
-    private Vector3 ProjectOnGround(Vector3 worldVelocity)
+    // =========================================================
+    // Stamina
+    // =========================================================
+    private void UpdateStamina(bool isSprinting)
     {
-        if (!IsGrounded) return worldVelocity;
-        return Vector3.ProjectOnPlane(worldVelocity, GroundNormal);
+        // start a short “breather” when we hit 0
+        if (currentStamina <= 0f)
+            exhaustedTimer = exhaustedRegenDelay;
+
+        if (exhaustedTimer > 0f)
+            exhaustedTimer -= Time.deltaTime;
+
+        if (isSprinting)
+        {
+            currentStamina -= staminaDrainPerSecond * Time.deltaTime;
+        }
+        else
+        {
+            if (exhaustedTimer <= 0f)
+                currentStamina += staminaRegenPerSecond * Time.deltaTime;
+        }
+
+        currentStamina = Mathf.Clamp(currentStamina, 0f, maxStamina);
+    }
+
+    private bool TrySpendStamina(float amount)
+    {
+        if (currentStamina < amount) return false;
+        currentStamina -= amount;
+        currentStamina = Mathf.Clamp(currentStamina, 0f, maxStamina);
+
+        // apply the same regen delay when spending stamina
+        exhaustedTimer = exhaustedRegenDelay;
+        return true;
+    }
+
+    // =========================================================
+    // Sliding
+    // =========================================================
+    private void ApplySteepSlopeSliding(bool bracingNow)
+    {
+        // Not on steep ground? decay slide velocity and exit.
+        if (!enableSteepSlide || !IsGrounded || OnWalkableGround)
+        {
+            wasBracingLastFrame = false;
+            steepSlideVelocity = Vector3.Lerp(steepSlideVelocity, Vector3.zero, steepSlideAcceleration * Time.deltaTime);
+            return;
+        }
+
+        // On too-steep slope: holding W cancels sliding
+        if (bracingNow)
+        {
+            steepSlideVelocity = Vector3.zero;
+            wasBracingLastFrame = true;
+            return;
+        }
+
+        Vector3 downSlope = GetDownSlopeDirection();
+        float t = Mathf.InverseLerp(maxSlopeAngle, 90f, GroundAngle);
+        Vector3 target = downSlope * (steepSlideSpeed * t);
+
+        steepSlideVelocity = wasBracingLastFrame
+            ? Vector3.Lerp(Vector3.zero, target, steepSlideKick)
+            : Vector3.Lerp(steepSlideVelocity, target, steepSlideAcceleration * Time.deltaTime);
+
+        horizontalVelocity += steepSlideVelocity;
+        wasBracingLastFrame = false;
+    }
+
+    // =========================================================
+    // State (for animations later)
+    // =========================================================
+    private void UpdateMovementState(bool hasMoveInput, bool bracingNow, bool isSprinting, bool sprintIntent, bool forwardIntent)
+    {
+        if (isRolling)
+        {
+            currentState = MovementState.Rolling;
+            return;
+        }
+
+        if (!IsGrounded)
+        {
+            currentState = MovementState.Airborne;
+            return;
+        }
+
+        // Too-steep ground: bracing vs sliding
+        if (!OnWalkableGround)
+        {
+            currentState = bracingNow ? MovementState.Walking : MovementState.Sliding;
+            return;
+        }
+
+        // Exhausted (trying to sprint but no stamina)
+        bool tryingToSprint = sprintIntent && forwardIntent;
+        if (tryingToSprint && currentStamina <= 0.1f)
+        {
+            currentState = MovementState.Exhausted;
+            return;
+        }
+
+        if (!hasMoveInput)
+        {
+            currentState = MovementState.Idle;
+            return;
+        }
+
+        currentState = isSprinting ? MovementState.Sprinting : MovementState.Walking;
+    }
+
+    // =========================================================
+    // Jumping
+    // =========================================================
+    private void HandleJump()
+    {
+        if (Input.GetButtonDown("Jump"))
+            jumpBufferCounter = jumpBufferTime;
+        else
+            jumpBufferCounter -= Time.deltaTime;
+
+        if (IsGrounded)
+            coyoteCounter = coyoteTime;
+        else
+            coyoteCounter -= Time.deltaTime;
+
+        if (jumpBufferCounter > 0f && coyoteCounter > 0f)
+        {
+            jumpBufferCounter = 0f;
+            coyoteCounter = 0f;
+            verticalVelocity = Mathf.Sqrt(2f * jumpHeight * -gravity);
+        }
+    }
+
+    private void ApplyVerticalForces()
+    {
+        if (IsGrounded && verticalVelocity < 0f)
+            verticalVelocity = -2f;
+
+        verticalVelocity += gravity * Time.deltaTime;
+    }
+
+    // =========================================================
+    // Helpers
+    // =========================================================
+    private Vector3 ProjectOnGround(Vector3 v)
+    {
+        return Vector3.ProjectOnPlane(v, GroundNormal);
     }
 
     private Vector3 GetDownSlopeDirection()
     {
         Vector3 down = Vector3.ProjectOnPlane(Vector3.down, GroundNormal);
-        if (down.sqrMagnitude < 0.0001f) return Vector3.zero;
-        return down.normalized;
+        return down.sqrMagnitude < 0.0001f ? Vector3.zero : down.normalized;
     }
 
-    private bool IsTryingToMoveUpSlope(Vector3 desiredWorldVelocity)
+    private bool IsTryingToMoveUpSlope(Vector3 desired)
     {
-        if (!IsGrounded) return false;
         if (GroundAngle < 0.5f) return false;
+
+        Vector3 moveDir = new Vector3(desired.x, 0f, desired.z);
+        if (moveDir.sqrMagnitude < 0.0001f) return false;
+        moveDir.Normalize();
 
         Vector3 slopeRight = Vector3.Cross(GroundNormal, Vector3.up);
         if (slopeRight.sqrMagnitude < 0.0001f) return false;
@@ -214,37 +420,67 @@ public class PlayerMovement : MonoBehaviour
         if (slopeUp.sqrMagnitude < 0.0001f) return false;
         slopeUp.Normalize();
 
-        Vector3 moveDir = desiredWorldVelocity;
-        moveDir.y = 0f;
-        if (moveDir.sqrMagnitude < 0.0001f) return false;
-        moveDir.Normalize();
-
         return Vector3.Dot(moveDir, slopeUp) > 0.2f;
     }
 
-    private void OnDrawGizmosSelected()
-    {
-        if (groundCheck == null) return;
-
-        Vector3 origin = groundCheck.position + Vector3.up * 0.05f;
-        float castDistance = groundCheckDistance + 0.05f;
-
-        bool hit = Physics.SphereCast(origin, groundRadius, Vector3.down, out _, castDistance, groundMask, QueryTriggerInteraction.Ignore);
-
-        Gizmos.color = hit ? Color.green : Color.red;
-        Gizmos.DrawWireSphere(origin, groundRadius);
-        Gizmos.DrawLine(origin, origin + Vector3.down * castDistance);
-    }
-
-    private void RotateBodyTowards(Vector3 worldMoveDir)
+    private void RotateBodyTowards(Vector3 dir)
     {
         if (visualBody == null) return;
 
-        // Only rotate on XZ plane
-        worldMoveDir.y = 0f;
-        if (worldMoveDir.sqrMagnitude < 0.0001f) return;
+        dir.y = 0f;
+        if (dir.sqrMagnitude < 0.0001f) return;
 
-        Quaternion target = Quaternion.LookRotation(worldMoveDir, Vector3.up);
+        Quaternion target = Quaternion.LookRotation(dir, Vector3.up);
         visualBody.rotation = Quaternion.Slerp(visualBody.rotation, target, turnSpeed * Time.deltaTime);
+    }
+
+    // =========================================================
+    // Roll (Prep)
+    // =========================================================
+    private void StartRoll(Vector3 input)
+    {
+        isRolling = true;
+        rollTimer = rollDuration;
+
+        // Choose direction: input if present, otherwise forward
+        Vector3 worldDir = (transform.right * input.x + transform.forward * input.z);
+        worldDir.y = 0f;
+
+        rollDirection = worldDir.sqrMagnitude > 0.001f ? worldDir.normalized : transform.forward;
+    }
+
+    private void UpdateRoll()
+    {
+        // Timer MUST tick down each frame while rolling
+        rollTimer -= Time.deltaTime;
+
+        if (rollTimer <= 0f)
+        {
+            rollTimer = 0f;
+            isRolling = false;
+            return;
+        }
+
+        // (No movement yet) — Day 05: apply roll velocity + input lock here
+    }
+
+    // =========================================================
+    // Debug HUD
+    // =========================================================
+    private void OnGUI()
+    {
+        if (!showDebugHUD) return;
+
+        GUI.Label(new Rect(debugHudOffset.x, debugHudOffset.y + 0f, 500f, 22f),
+            $"State: {currentState}");
+
+        GUI.Label(new Rect(debugHudOffset.x, debugHudOffset.y + 20f, 500f, 22f),
+            $"Stamina: {currentStamina:0.0} / {maxStamina:0.0}");
+
+        GUI.Label(new Rect(debugHudOffset.x, debugHudOffset.y + 40f, 500f, 22f),
+            $"Grounded: {IsGrounded} | Walkable: {OnWalkableGround} | Angle: {GroundAngle:0.0}");
+
+        GUI.Label(new Rect(debugHudOffset.x, debugHudOffset.y + 60f, 500f, 22f),
+            $"CanRoll: {CanRoll} | Rolling: {isRolling} | RollTimer: {rollTimer:0.00}");
     }
 }
