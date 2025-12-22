@@ -46,9 +46,9 @@ public class PlayerMovement : MonoBehaviour
     [SerializeField] private float jumpHeight = 1.5f;
     [SerializeField] private float jumpBufferTime = 0.10f;
     [SerializeField] private float coyoteTime = 0.10f;
-    [SerializeField] private float lockedJumpBufferTime = 0.60f;
-    [Tooltip("If you press Jump during roll/recovery, keep it buffered this long so it can fire on unlock.")]
 
+    [Tooltip("If you press Jump during roll/recovery, keep it buffered this long so it can fire on unlock.")]
+    [SerializeField] private float lockedJumpBufferTime = 0.60f;
 
     [Header("Gravity")]
     [SerializeField] private float gravity = -20f;
@@ -81,7 +81,7 @@ public class PlayerMovement : MonoBehaviour
     // Dodge Roll
     // =========================================================
     [Header("Dodge Roll")]
-    [SerializeField] private KeyCode rollKey = KeyCode.LeftControl;   // <-- CHANGED
+    [SerializeField] private KeyCode rollKey = KeyCode.LeftControl;
     [SerializeField] private float rollDuration = 0.35f;
     [SerializeField] private float rollSpeed = 10f;
     [SerializeField] private float rollCost = 25f;
@@ -145,6 +145,12 @@ public class PlayerMovement : MonoBehaviour
         currentStamina >= rollCost;
 
     // =========================================================
+    // Animations
+    // =========================================================
+    [SerializeField] private Animator animator;
+    private static readonly int StateIdHash = Animator.StringToHash("StateId");
+
+    // =========================================================
     // Unity lifecycle
     // =========================================================
     private void Awake()
@@ -158,6 +164,8 @@ public class PlayerMovement : MonoBehaviour
         rollTimer = 0f;
         rollCooldownTimer = 0f;
         rollRecoveryTimer = 0f;
+
+        if (!animator) animator = GetComponentInChildren<Animator>();
     }
 
     private void Update()
@@ -169,7 +177,6 @@ public class PlayerMovement : MonoBehaviour
         UpdateGroundProbe();
 
         // 2) Jump buffering should work EVEN during roll/recovery
-        // (You can press Jump during the roll and it will fire on unlock if still valid.)
         BufferJumpInput();
         UpdateCoyoteTimer();
 
@@ -210,25 +217,28 @@ public class PlayerMovement : MonoBehaviour
         controller.Move((horizontalVelocity + Vector3.up * verticalVelocity) * Time.deltaTime);
     }
 
+    // IMPORTANT: LateUpdate runs even if Update returned early,
+    // so your Animator always gets synced (including during roll/recovery).
+    private void LateUpdate()
+    {
+        if (!animator) return;
+        animator.SetInteger(StateIdHash, (int)currentState);
+    }
+
     // =========================================================
     // Jump buffering (works through roll/recovery)
     // =========================================================
     private void BufferJumpInput()
     {
-        // If Jump pressed, refresh buffer.
-        // During roll/recovery, we use a longer buffer so it survives the lock.
         if (Input.GetButtonDown("Jump"))
         {
             jumpBufferCounter = IsInputLocked ? lockedJumpBufferTime : jumpBufferTime;
             return;
         }
 
-        // IMPORTANT: Don’t burn the buffer while locked.
-        // We want "press during roll -> jump on unlock".
         if (!IsInputLocked)
             jumpBufferCounter -= Time.deltaTime;
     }
-
 
     private void UpdateCoyoteTimer()
     {
@@ -240,8 +250,6 @@ public class PlayerMovement : MonoBehaviour
 
     private void TryConsumeBufferedJump()
     {
-        // Only attempt jump when NOT locked.
-        // (We still buffered the input while locked.)
         if (jumpBufferCounter <= 0f) return;
         if (coyoteCounter <= 0f) return;
 
@@ -325,10 +333,8 @@ public class PlayerMovement : MonoBehaviour
             rollTimer = 0f;
             isRolling = false;
 
-            // start recovery lock
             rollRecoveryTimer = rollRecoveryTime;
 
-            // small momentum carry
             horizontalVelocity = rollDirection * (rollSpeed * 0.25f);
             return;
         }
@@ -350,8 +356,6 @@ public class PlayerMovement : MonoBehaviour
             horizontalVelocity = Vector3.Lerp(horizontalVelocity, Vector3.zero, deceleration * Time.deltaTime);
         }
 
-        // NOTE: we do NOT consume the buffered jump while locked.
-        // We just keep gravity going.
         ApplyVerticalForces();
 
         controller.Move((horizontalVelocity + Vector3.up * verticalVelocity) * Time.deltaTime);
