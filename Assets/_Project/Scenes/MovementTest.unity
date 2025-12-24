@@ -119,33 +119,6 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &361989466 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 1499924580125654838, guid: 11680d6f8245ee04eb746dab3942b3cb, type: 3}
-  m_PrefabInstance: {fileID: 651097714}
-  m_PrefabAsset: {fileID: 0}
---- !u!95 &361989471
-Animator:
-  serializedVersion: 7
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 361989466}
-  m_Enabled: 1
-  m_Avatar: {fileID: 0}
-  m_Controller: {fileID: 9100000, guid: c7f0a4f1b19933d40b73df039183f61f, type: 2}
-  m_CullingMode: 0
-  m_UpdateMode: 0
-  m_ApplyRootMotion: 0
-  m_LinearVelocityBlending: 0
-  m_StabilizeFeet: 0
-  m_AnimatePhysics: 0
-  m_WarningMessage: 
-  m_HasTransformHierarchy: 1
-  m_AllowConstantClipSamplingOptimization: 1
-  m_KeepAnimatorStateOnDisable: 0
-  m_WriteDefaultValuesOnDisable: 0
 --- !u!1 &532420578
 GameObject:
   m_ObjectHideFlags: 0
@@ -307,25 +280,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: Player
       objectReference: {fileID: 0}
-    - target: {fileID: 9133067448626540253, guid: 11680d6f8245ee04eb746dab3942b3cb, type: 3}
-      propertyPath: m_Materials.Array.size
-      value: 1
-      objectReference: {fileID: 0}
-    - target: {fileID: 9133067448626540253, guid: 11680d6f8245ee04eb746dab3942b3cb, type: 3}
-      propertyPath: 'm_Materials.Array.data[0]'
-      value: 
-      objectReference: {fileID: 2100000, guid: 7cc777ca1be329846b625248ec5b745b, type: 2}
-    - target: {fileID: 9133067448626540253, guid: 11680d6f8245ee04eb746dab3942b3cb, type: 3}
-      propertyPath: 'm_Materials.Array.data[1]'
-      value: 
-      objectReference: {fileID: 2100000, guid: fdf4bb116f1afc5408be2f5c167a052c, type: 2}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents:
-    - targetCorrespondingSourceObject: {fileID: 1499924580125654838, guid: 11680d6f8245ee04eb746dab3942b3cb, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 361989471}
+    m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 11680d6f8245ee04eb746dab3942b3cb, type: 3}
 --- !u!1 &912589462
 GameObject:
